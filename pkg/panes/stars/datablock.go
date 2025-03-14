@@ -282,13 +282,13 @@ func dbDrawLine(line dbLine, td *renderer.TextDrawBuilder, pt [2]float32, font *
 	// in a call to TextDrawBuider AddText() only when the color
 	// changes. (This is some effort to minimize the number of AddText()
 	// calls.)
-	str := ""
+	var str strings.Builder
 	style := renderer.TextStyle{Font: font}
 
 	flush := func() {
-		if len(str) > 0 {
-			pt = td.AddText(rewriteDelta(str), pt, style)
-			str = ""
+		if str.Len() > 0 {
+			pt = td.AddText(rewriteDelta(str.String()), pt, style)
+			str.Reset()
 		}
 	}
 
@@ -296,7 +296,7 @@ func dbDrawLine(line dbLine, td *renderer.TextDrawBuilder, pt [2]float32, font *
 		ch := line.ch[i]
 		if ch.ch == 0 {
 			// Treat unset as a space
-			str += " "
+			str.WriteByte(' ')
 		} else {
 			// Flashing text goes on a 0.5 second cycle.
 			br := brightness
@@ -309,7 +309,7 @@ func dbDrawLine(line dbLine, td *renderer.TextDrawBuilder, pt [2]float32, font *
 				flush()
 				style.Color = c
 			}
-			str += string(ch.ch)
+			str.WriteRune(ch.ch)
 		}
 	}
 	flush()
@@ -349,7 +349,7 @@ func (sp *STARSPane) datablockType(ctx *panes.Context, ac *av.Aircraft) Databloc
 			return FullDatablock
 		}
 
-		if ac.Squawk != trk.FlightPlan.AssignedSquawk {
+		if ac.Squawk != ac.FlightPlan.AssignedSquawk {
 			dt = PartialDatablock
 		}
 
@@ -387,7 +387,7 @@ func (sp *STARSPane) datablockType(ctx *panes.Context, ac *av.Aircraft) Databloc
 			dt = FullDatablock
 		}
 
-		if sp.currentPrefs().OverflightFullDatablocks && sp.isOverflight(ctx, trk) {
+		if sp.currentPrefs().OverflightFullDatablocks && sp.isOverflight(ctx, ac) {
 			dt = FullDatablock
 		}
 
@@ -495,13 +495,13 @@ func (sp *STARSPane) getDatablock(ctx *panes.Context, ac *av.Aircraft) datablock
 	groundspeed := fmt.Sprintf("%02d", (state.TrackGroundspeed()+5)/10)
 	// Note arrivalAirport is only set if it should be shown when there is no scratchpad set
 	arrivalAirport := ""
-	if ap := ctx.ControlClient.Airports[trk.FlightPlan.ArrivalAirport]; ap != nil && !ap.OmitArrivalScratchpad {
-		arrivalAirport = trk.FlightPlan.ArrivalAirport
+	if ap := ctx.ControlClient.Airports[ac.FlightPlan.ArrivalAirport]; ap != nil && !ap.OmitArrivalScratchpad {
+		arrivalAirport = ac.FlightPlan.ArrivalAirport
 		if len(arrivalAirport) == 4 && arrivalAirport[0] == 'K' {
 			arrivalAirport = arrivalAirport[1:]
 		}
 	}
-	beaconMismatch := ac.Squawk != trk.FlightPlan.AssignedSquawk && !squawkingSPC
+	beaconMismatch := ac.Squawk != ac.FlightPlan.AssignedSquawk && !squawkingSPC
 
 	// Figure out what to display for scratchpad 1 (used in both FDB and PDBs)
 	sp1 := trk.SP1
@@ -628,7 +628,7 @@ func (sp *STARSPane) getDatablock(ctx *panes.Context, ac *av.Aircraft) datablock
 		// those cases? (Note that SPC upgrades partial to full datablocks.)
 		//
 		// TODO: previously we had the following check:
-		// if ac.Squawk != trk.FlightPlan.AssignedSquawk && ac.Squawk != 0o1200 {
+		// if ac.Squawk != ac.FlightPlan.AssignedSquawk && ac.Squawk != 0o1200 {
 		// and would display ac.Squawk + flashing WHO in field0
 		alerts := sp.getDatablockAlerts(ctx, ac, PartialDatablock)
 		copy(db.field0[:], alerts[:])
@@ -662,9 +662,9 @@ func (sp *STARSPane) getDatablock(ctx *panes.Context, ac *av.Aircraft) datablock
 		// Field 3: by default, groundspeed and/or "V" for VFR, "E" for overflight, followed by CWT,
 		// but may be adapted.
 		rulesCategory := " "
-		if trk.FlightPlan.Rules == av.VFR {
+		if ac.FlightPlan.Rules == av.VFR {
 			rulesCategory = "V"
-		} else if sp.isOverflight(ctx, trk) {
+		} else if sp.isOverflight(ctx, ac) {
 			rulesCategory = "E"
 		}
 		if fa.PDB.SplitGSAndCWT {
@@ -770,7 +770,7 @@ func (sp *STARSPane) getDatablock(ctx *panes.Context, ac *av.Aircraft) datablock
 		rulesCategory := " "
 		if ac.FlightPlan.Rules == av.VFR {
 			rulesCategory = "V"
-		} else if sp.isOverflight(ctx, trk) {
+		} else if sp.isOverflight(ctx, ac) {
 			rulesCategory = "E"
 		}
 		rulesCategory += state.CWTCategory + " "
@@ -834,7 +834,7 @@ func (sp *STARSPane) getDatablock(ctx *panes.Context, ac *av.Aircraft) datablock
 		}
 		if beaconMismatch {
 			idx := util.Select(fieldEmpty(db.field7[0][:]), 0, 1)
-			formatDBText(db.field7[idx][:], trk.FlightPlan.AssignedSquawk.String(), color, true)
+			formatDBText(db.field7[idx][:], ac.FlightPlan.AssignedSquawk.String(), color, true)
 		}
 
 		return db
@@ -907,13 +907,9 @@ func (sp *STARSPane) trackDatablockColorBrightness(ctx *panes.Context, ac *av.Ai
 		posBrightness /= 2
 	}
 
-	if trk == nil {
-		color = STARSUntrackedAircraftColor
-	} else if _, ok := sp.ForceQLCallsigns[ac.Callsign]; ok {
+	if _, ok := sp.ForceQLCallsigns[ac.Callsign]; ok {
 		// Check if we're the controller being ForceQL
 		color = STARSInboundPointOutColor
-	} else if trk.TrackOwner == "" {
-		color = STARSUntrackedAircraftColor
 	} else if state.PointOutAcknowledged || state.ForceQL {
 		// Ack'ed point out to us (but not cleared) or force quick look.
 		color = STARSInboundPointOutColor
@@ -923,6 +919,8 @@ func (sp *STARSPane) trackDatablockColorBrightness(ctx *panes.Context, ac *av.Ai
 	} else if state.IsSelected {
 		// middle button selected
 		color = STARSSelectedAircraftColor
+	} else if trk.TrackOwner == "" {
+		color = STARSUntrackedAircraftColor
 	} else if trk.TrackOwner == ctx.ControlClient.PrimaryTCP { //change
 		// we own the track track
 		color = STARSTrackedAircraftColor
@@ -979,7 +977,7 @@ func (sp *STARSPane) datablockVisible(ac *av.Aircraft, ctx *panes.Context) bool 
 		// If FDB, may trump others but idc
 		// This *should* be primarily doing CA and ATPA cones
 		return true
-	} else if sp.isOverflight(ctx, trk) && sp.currentPrefs().OverflightFullDatablocks { //Need a f7 + e
+	} else if sp.isOverflight(ctx, ac) && sp.currentPrefs().OverflightFullDatablocks { //Need a f7 + e
 		// Overflights
 		return true
 	} else if sp.isQuicklooked(ctx, ac) {
@@ -1033,6 +1031,24 @@ func (sp *STARSPane) drawDatablocks(aircraft []*av.Aircraft, ctx *panes.Context,
 		case FullDatablock:
 			fdbs = append(fdbs, ac)
 		}
+	}
+
+	if sp.dwellAircraft != "" {
+		// If the dwelled aircraft is in the given slice, move it to the
+		// end so that it is drawn last (among its datablock category) and
+		// appears on top.
+		moveDwelledToEnd := func(aircraft []*av.Aircraft) []*av.Aircraft {
+			isDwelled := func(ac *av.Aircraft) bool { return ac.Callsign == sp.dwellAircraft }
+			if idx := slices.IndexFunc(aircraft, isDwelled); idx != -1 {
+				aircraft = append(aircraft, aircraft[idx])
+				aircraft = append(aircraft[:idx], aircraft[idx+1:]...)
+			}
+			return aircraft
+		}
+
+		ldbs = moveDwelledToEnd(ldbs)
+		pdbs = moveDwelledToEnd(pdbs)
+		fdbs = moveDwelledToEnd(fdbs)
 	}
 
 	for _, dbAircraft := range [][]*av.Aircraft{ldbs, pdbs, fdbs} {
@@ -1181,7 +1197,7 @@ func (sp *STARSPane) getDatablockAlerts(ctx *panes.Context, ac *av.Aircraft, dbt
 	}
 
 	// Both FDB and PDB
-	if sp.radarMode(ctx.ControlClient.RadarSites) == RadarModeFused &&
+	if sp.radarMode(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites) == RadarModeFused &&
 		ac.TrackingController != "" && ac.PilotReportedAltitude == 0 &&
 		(ac.Mode != av.Altitude || ac.InhibitModeCAltitudeDisplay) {
 		// No altitude being reported, one way or another (off or mode

@@ -176,8 +176,10 @@ func (ac *Aircraft) transmitResponse(r PilotResponse) []RadioTransmission {
 	}}
 }
 
-func (ac *Aircraft) Update(wind WindModel, simlg *log.Logger) *Waypoint {
-	lg := simlg.With(slog.String("callsign", ac.Callsign))
+func (ac *Aircraft) Update(wind WindModel, lg *log.Logger) *Waypoint {
+	if lg != nil {
+		lg = lg.With(slog.String("callsign", ac.Callsign))
+	}
 
 	passedWaypoint := ac.Nav.Update(wind, lg)
 	if passedWaypoint != nil {
@@ -374,7 +376,8 @@ func (ac *Aircraft) InitializeArrival(ap *Airport, arr *Arrival, arrivalHandoffC
 		ac.GoAroundDistance = &d
 	}
 
-	nav := MakeArrivalNav(arr, *ac.FlightPlan, perf, nmPerLongitude, magneticVariation, wind, lg)
+	nav := MakeArrivalNav(ac.Callsign, arr, *ac.FlightPlan, perf, nmPerLongitude, magneticVariation,
+		wind, lg)
 	if nav == nil {
 		return fmt.Errorf("error initializing Nav")
 	}
@@ -431,8 +434,10 @@ func (ac *Aircraft) InitializeDeparture(ap *Airport, departureAirport string, de
 
 	ac.HoldForRelease = ap.HoldForRelease && ac.FlightPlan.Rules == IFR // VFRs aren't held
 
-	nav := MakeDepartureNav(*ac.FlightPlan, perf, exitRoute.AssignedAltitude,
-		exitRoute.ClearedAltitude, exitRoute.SpeedRestriction, wp, nmPerLongitude, magneticVariation, wind, lg)
+	randomizeAltitudeRange := ac.FlightPlan.Rules == VFR
+	nav := MakeDepartureNav(ac.Callsign, *ac.FlightPlan, perf, exitRoute.AssignedAltitude,
+		exitRoute.ClearedAltitude, exitRoute.SpeedRestriction, wp, randomizeAltitudeRange,
+		nmPerLongitude, magneticVariation, wind, lg)
 	if nav == nil {
 		return fmt.Errorf("error initializing Nav")
 	}
@@ -470,6 +475,31 @@ func (ac *Aircraft) InitializeDeparture(ap *Airport, departureAirport string, de
 	return nil
 }
 
+func (ac *Aircraft) InitializeVFRDeparture(ap *Airport, wps WaypointArray, alt int,
+	randomizeAltitudeRange bool, nmPerLongitude float32, magneticVariation float32, wind WindModel,
+	lg *log.Logger) error {
+	wp := util.DuplicateSlice(wps)
+
+	perf, ok := DB.AircraftPerformance[ac.FlightPlan.BaseType()]
+	if !ok {
+		lg.Errorf("%s: unable to get performance model", ac.FlightPlan.BaseType())
+		return ErrUnknownAircraftType
+	}
+
+	ac.FlightPlan.Altitude = math.Min(alt, int(perf.Ceiling))
+
+	nav := MakeDepartureNav(ac.Callsign, *ac.FlightPlan, perf, 0, /* assigned alt */
+		ac.FlightPlan.Altitude /* cleared alt */, 0 /* speed restriction */, wp,
+		randomizeAltitudeRange, nmPerLongitude, magneticVariation, wind, lg)
+	if nav == nil {
+		return fmt.Errorf("error initializing Nav")
+	}
+	ac.Nav = *nav
+	ac.Nav.Check(lg)
+
+	return nil
+}
+
 func (ac *Aircraft) InitializeOverflight(of *Overflight, controller string, nmPerLongitude float32,
 	magneticVariation float32, wind WindModel, lg *log.Logger) error {
 	ac.Scratchpad = of.Scratchpad
@@ -491,7 +521,8 @@ func (ac *Aircraft) InitializeOverflight(of *Overflight, controller string, nmPe
 	}
 	ac.FlightPlan.Route = of.Waypoints.RouteString()
 
-	nav := MakeOverflightNav(of, *ac.FlightPlan, perf, nmPerLongitude, magneticVariation, wind, lg)
+	nav := MakeOverflightNav(ac.Callsign, of, *ac.FlightPlan, perf, nmPerLongitude,
+		magneticVariation, wind, lg)
 	if nav == nil {
 		return fmt.Errorf("error initializing Nav")
 	}

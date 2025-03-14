@@ -1,8 +1,8 @@
-// pkg/sim/server.go
+// pkg/server/server.go
 // Copyright(c) 2022-2024 vice contributors, licensed under the GNU Public License, Version 3.
 // SPDX: GPL-3.0-only
 
-package sim
+package server
 
 import (
 	"bytes"
@@ -18,8 +18,11 @@ import (
 	"runtime"
 	"time"
 
+	av "github.com/mmp/vice/pkg/aviation"
 	"github.com/mmp/vice/pkg/log"
+	"github.com/mmp/vice/pkg/rand"
 	"github.com/mmp/vice/pkg/util"
+
 	"github.com/shirou/gopsutil/cpu"
 )
 
@@ -34,6 +37,51 @@ type Server struct {
 	runningSims map[string]*RemoteSim
 }
 
+type NewSimConfiguration struct {
+	// FIXME: unify Password/RemoteSimPassword, SelectedRemoteSim / NewSimName, etc.
+	NewSimType   int
+	NewSimName   string
+	GroupName    string
+	ScenarioName string
+
+	SelectedRemoteSim         string
+	SelectedRemoteSimPosition string
+
+	Scenario *SimScenarioConfiguration
+
+	TFRs []av.TFR
+
+	TRACONName        string
+	RequirePassword   bool
+	Password          string // for create remote only
+	RemoteSimPassword string // for join remote only
+
+	LiveWeather bool
+
+	InstructorAllowed bool
+	Instructor        bool
+}
+
+const (
+	NewSimCreateLocal = iota
+	NewSimCreateRemote
+	NewSimJoinRemote
+)
+
+func MakeNewSimConfiguration() NewSimConfiguration {
+	return NewSimConfiguration{NewSimName: rand.AdjectiveNoun()}
+}
+
+type RemoteSim struct {
+	GroupName          string
+	ScenarioName       string
+	PrimaryController  string
+	RequirePassword    bool
+	InstructorAllowed  bool
+	AvailablePositions map[string]av.Controller
+	CoveredPositions   map[string]av.Controller
+}
+
 type serverConnection struct {
 	Server *Server
 	Err    error
@@ -41,6 +89,18 @@ type serverConnection struct {
 
 func (s *Server) Close() error {
 	return s.RPCClient.Close()
+}
+
+func (s *Server) GetConfigs() map[string]map[string]*Configuration {
+	return s.configs
+}
+
+func (s *Server) setRunningSims(rs map[string]*RemoteSim) {
+	s.runningSims = rs
+}
+
+func (s *Server) GetRunningSims() map[string]*RemoteSim {
+	return s.runningSims
 }
 
 func RunServer(extraScenario string, extraVideoMap string, serverPort int, lg *log.Logger) {
@@ -82,9 +142,9 @@ func TryConnectRemoteServer(hostname string, lg *log.Logger) chan *serverConnect
 			ch <- &serverConnection{Err: err}
 			return
 		} else {
-			var so SignOnResult
+			var cr ConnectResult
 			start := time.Now()
-			if err := client.CallWithTimeout("SimManager.SignOn", ViceRPCVersion, &so); err != nil {
+			if err := client.CallWithTimeout("SimManager.Connect", ViceRPCVersion, &cr); err != nil {
 				ch <- &serverConnection{Err: err}
 			} else {
 				lg.Debugf("%s: server returned configuration in %s", hostname, time.Since(start))
@@ -92,8 +152,8 @@ func TryConnectRemoteServer(hostname string, lg *log.Logger) chan *serverConnect
 					Server: &Server{
 						RPCClient:   client,
 						name:        "Network (Multi-controller)",
-						configs:     so.Configurations,
-						runningSims: so.RunningSims,
+						configs:     cr.Configurations,
+						runningSims: cr.RunningSims,
 					},
 				}
 			}
@@ -294,8 +354,8 @@ tr:nth-child(even) {
   <tr>
   <th>Name</th>
   <th>Scenario</th>
-  <th>Dep</th>
-  <th>Arr</th>
+  <th>IFR</th>
+  <th>VFR</th>
   <th>Idle Time</th>
   <th>Active Controllers</th>
 
@@ -303,8 +363,8 @@ tr:nth-child(even) {
   </tr>
   <td>{{.Name}}</td>
   <td>{{.Config}}</td>
-  <td>{{.TotalDepartures}}</td>
-  <td>{{.TotalArrivals}}</td>
+  <td>{{.TotalIFR}}</td>
+  <td>{{.TotalVFR}}</td>
   <td>{{.IdleTime}}</td>
   <td><tt>{{.Controllers}}</tt></td>
 </tr>

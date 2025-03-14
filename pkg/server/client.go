@@ -1,25 +1,20 @@
-// pkg/sim/client.go
+// pkg/server/client.go
 // Copyright(c) 2022-2024 vice contributors, licensed under the GNU Public License, Version 3.
 // SPDX: GPL-3.0-only
 
-package sim
+package server
 
 import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	av "github.com/mmp/vice/pkg/aviation"
 	"github.com/mmp/vice/pkg/log"
 	"github.com/mmp/vice/pkg/math"
-	"github.com/mmp/vice/pkg/renderer"
+	"github.com/mmp/vice/pkg/sim"
 	"github.com/mmp/vice/pkg/util"
-	"golang.org/x/exp/maps"
-
-	"github.com/mmp/imgui-go/v4"
 )
 
 type ControlClient struct {
@@ -30,49 +25,51 @@ type ControlClient struct {
 	lastUpdateRequest time.Time
 	lastReturnedTime  time.Time
 	updateCall        *util.PendingCall
+	remoteSim         bool
 
 	pendingCalls []*util.PendingCall
 
-	scopeDraw struct {
-		arrivals    map[string]map[int]bool               // group->index
-		approaches  map[string]map[string]bool            // airport->approach
-		departures  map[string]map[string]map[string]bool // airport->runway->exit
-		overflights map[string]map[int]bool               // group->index
-		airspace    map[string]map[string]bool            // ctrl -> volume name
+	SessionStats struct {
+		Departures    int
+		Arrivals      int
+		IntraFacility int
+		Overflights   int
+
+		SignOnTime time.Time
 	}
 
 	// This is all read-only data that we expect other parts of the system
 	// to access directly.
-	State
+	sim.State
 }
 
 func (c *ControlClient) RPCClient() *util.RPCClient {
 	return c.proxy.Client
 }
 
-func NewControlClient(ss State, controllerToken string, client *util.RPCClient, lg *log.Logger) *ControlClient {
-	return &ControlClient{
-		State: ss,
-		lg:    lg,
+func NewControlClient(ss sim.State, local bool, controllerToken string, client *util.RPCClient, lg *log.Logger) *ControlClient {
+	cc := &ControlClient{
+		State:     ss,
+		lg:        lg,
+		remoteSim: !local,
 		proxy: &proxy{
 			ControllerToken: controllerToken,
 			Client:          client,
 		},
 		lastUpdateRequest: time.Now(),
 	}
+	cc.SessionStats.SignOnTime = ss.SimTime
+	return cc
 }
 
 func (c *ControlClient) Status() string {
 	if c == nil || c.SimDescription == "" {
 		return "[disconnected]"
 	} else {
-		deparr := fmt.Sprintf(" [ %d departures %d arrivals %d overflights ]",
-			c.TotalDepartures, c.TotalArrivals, c.TotalOverflights)
-		if c.SimName == "" {
-			return c.State.PrimaryTCP + ": " + c.SimDescription + deparr
-		} else {
-			return c.State.PrimaryTCP + "@" + c.SimName + ": " + c.SimDescription + deparr
-		}
+		stats := c.SessionStats
+		deparr := fmt.Sprintf(" [ %d departures %d arrivals %d intrafacility %d overflights ]",
+			stats.Departures, stats.Arrivals, stats.IntraFacility, stats.Overflights)
+		return c.State.PrimaryTCP + c.SimDescription + deparr
 	}
 }
 
@@ -84,14 +81,14 @@ func (c *ControlClient) SetSquawkAutomatic(callsign string) error {
 	return nil // UNIMPLEMENTED
 }
 
-func (c *ControlClient) TakeOrReturnLaunchControl(eventStream *EventStream) {
+func (c *ControlClient) TakeOrReturnLaunchControl(eventStream *sim.EventStream) {
 	c.pendingCalls = append(c.pendingCalls,
 		&util.PendingCall{
 			Call:      c.proxy.TakeOrReturnLaunchControl(),
 			IssueTime: time.Now(),
 			OnErr: func(e error) {
-				eventStream.Post(Event{
-					Type:    StatusMessageEvent,
+				eventStream.Post(sim.Event{
+					Type:    sim.StatusMessageEvent,
 					Message: e.Error(),
 				})
 			},
@@ -106,7 +103,7 @@ func (c *ControlClient) LaunchAircraft(ac av.Aircraft) {
 		})
 }
 
-func (c *ControlClient) SendGlobalMessage(global GlobalMessage) {
+func (c *ControlClient) SendGlobalMessage(global sim.GlobalMessage) {
 	c.pendingCalls = append(c.pendingCalls,
 		&util.PendingCall{
 			Call:      c.proxy.GlobalMessage(global),
@@ -199,7 +196,7 @@ func (c *ControlClient) SetGlobalLeaderLine(callsign string, dir *math.CardinalO
 		})
 }
 
-func (c *ControlClient) CreateUnsupportedTrack(callsign string, ut *UnsupportedTrack,
+func (c *ControlClient) CreateUnsupportedTrack(callsign string, ut *sim.UnsupportedTrack,
 	success func(any), err func(error)) {
 	c.pendingCalls = append(c.pendingCalls,
 		&util.PendingCall{
@@ -210,7 +207,7 @@ func (c *ControlClient) CreateUnsupportedTrack(callsign string, ut *UnsupportedT
 		})
 }
 
-func (c *ControlClient) AutoAssociateFP(callsign string, fp *STARSFlightPlan, success func(any),
+func (c *ControlClient) AutoAssociateFP(callsign string, fp *av.STARSFlightPlan, success func(any),
 	err func(error)) {
 	c.pendingCalls = append(c.pendingCalls,
 		&util.PendingCall{
@@ -221,7 +218,7 @@ func (c *ControlClient) AutoAssociateFP(callsign string, fp *STARSFlightPlan, su
 		})
 }
 
-func (c *ControlClient) UploadFlightPlan(fp *STARSFlightPlan, typ int, success func(any), err func(error)) {
+func (c *ControlClient) UploadFlightPlan(fp *av.STARSFlightPlan, typ int, success func(any), err func(error)) {
 	c.pendingCalls = append(c.pendingCalls,
 		&util.PendingCall{
 			Call:      c.proxy.UploadFlightPlan(typ, fp),
@@ -231,7 +228,29 @@ func (c *ControlClient) UploadFlightPlan(fp *STARSFlightPlan, typ int, success f
 		})
 }
 
-func (c *ControlClient) InitiateTrack(callsign string, fp *STARSFlightPlan, success func(any),
+// Utility function that we shim around the user-supplied "success"
+// callback for control operations where we increment the controller's "#
+// airplanes worked" stats.
+func (c *ControlClient) updateControllerStats(callsign string, next func(any)) func(any) {
+	return func(result any) {
+		if ac, ok := c.State.Aircraft[callsign]; ok {
+			if c.IsIntraFacility(ac) {
+				c.SessionStats.IntraFacility++
+			} else if c.IsDeparture(ac) {
+				c.SessionStats.Departures++
+			} else if c.IsArrival(ac) {
+				c.SessionStats.Arrivals++
+			} else if c.IsOverflight(ac) {
+				c.SessionStats.Overflights++
+			}
+		}
+		if next != nil {
+			next(result)
+		}
+	}
+}
+
+func (c *ControlClient) InitiateTrack(callsign string, fp *av.STARSFlightPlan, success func(any),
 	err func(error)) {
 	// Modifying locally is not canonical but improves perceived latency in
 	// the common case; the RPC may fail, though that's fine; the next
@@ -247,7 +266,7 @@ func (c *ControlClient) InitiateTrack(callsign string, fp *STARSFlightPlan, succ
 		&util.PendingCall{
 			Call:      c.proxy.InitiateTrack(callsign, fp),
 			IssueTime: time.Now(),
-			OnSuccess: success,
+			OnSuccess: c.updateControllerStats(callsign, success),
 			OnErr:     err,
 		})
 }
@@ -288,7 +307,7 @@ func (c *ControlClient) AcceptHandoff(callsign string, success func(any), err fu
 		&util.PendingCall{
 			Call:      c.proxy.AcceptHandoff(callsign),
 			IssueTime: time.Now(),
-			OnSuccess: success,
+			OnSuccess: c.updateControllerStats(callsign, success),
 			OnErr:     err,
 		})
 }
@@ -308,7 +327,7 @@ func (c *ControlClient) AcceptRedirectedHandoff(callsign string, success func(an
 		&util.PendingCall{
 			Call:      c.proxy.AcceptRedirectedHandoff(callsign),
 			IssueTime: time.Now(),
-			OnSuccess: success,
+			OnSuccess: c.updateControllerStats(callsign, success),
 			OnErr:     err,
 		})
 }
@@ -445,7 +464,7 @@ func (c *ControlClient) Disconnect() {
 
 // Note that the success callback is passed an integer, giving the index of
 // the newly-created restriction area.
-func (c *ControlClient) CreateRestrictionArea(ra RestrictionArea, success func(int), err func(error)) {
+func (c *ControlClient) CreateRestrictionArea(ra av.RestrictionArea, success func(int), err func(error)) {
 	// Speculatively make the change locally immediately to reduce perceived latency.
 	if len(c.State.UserRestrictionAreas) < 100 {
 		c.State.UserRestrictionAreas = append(c.State.UserRestrictionAreas, ra)
@@ -461,7 +480,7 @@ func (c *ControlClient) CreateRestrictionArea(ra RestrictionArea, success func(i
 		})
 }
 
-func (c *ControlClient) UpdateRestrictionArea(idx int, ra RestrictionArea, success func(any), err func(error)) {
+func (c *ControlClient) UpdateRestrictionArea(idx int, ra av.RestrictionArea, success func(any), err func(error)) {
 	// Speculatively make the change locally immediately to reduce perceived latency.
 	if idx <= 100 && idx-1 < len(c.State.UserRestrictionAreas) {
 		c.State.UserRestrictionAreas[idx-1] = ra
@@ -483,7 +502,7 @@ func (c *ControlClient) DeleteRestrictionArea(idx int, success func(any), err fu
 	// Delete locally to reduce latency; note that only user restriction
 	// areas can be deleted, not system ones from the scenario file.
 	if idx-1 < len(c.State.UserRestrictionAreas) {
-		c.State.UserRestrictionAreas[idx-1] = RestrictionArea{Deleted: true}
+		c.State.UserRestrictionAreas[idx-1] = av.RestrictionArea{Deleted: true}
 	}
 	c.pendingCalls = append(c.pendingCalls,
 		&util.PendingCall{
@@ -500,8 +519,8 @@ func (c *ControlClient) GetVideoMapLibrary(filename string) (*av.VideoMapLibrary
 	return &vmf, err
 }
 
-func (c *ControlClient) ControllerAirspace(id string) []ControllerAirspaceVolume {
-	var vols []ControllerAirspaceVolume
+func (c *ControlClient) ControllerAirspace(id string) []av.ControllerAirspaceVolume {
+	var vols []av.ControllerAirspaceVolume
 	for _, pos := range c.State.GetConsolidatedPositions(id) {
 		for _, sub := range util.SortedMapKeys(c.State.Airspace[pos]) {
 			vols = append(vols, c.State.Airspace[pos][sub]...)
@@ -510,7 +529,7 @@ func (c *ControlClient) ControllerAirspace(id string) []ControllerAirspaceVolume
 	return vols
 }
 
-func (c *ControlClient) GetUpdates(eventStream *EventStream, onErr func(error)) {
+func (c *ControlClient) GetUpdates(eventStream *sim.EventStream, onErr func(error)) {
 	if c.proxy == nil {
 		return
 	}
@@ -534,7 +553,7 @@ func (c *ControlClient) GetUpdates(eventStream *EventStream, onErr func(error)) 
 		}
 		c.lastUpdateRequest = time.Now()
 
-		wu := &WorldUpdate{}
+		wu := &sim.WorldUpdate{}
 		c.updateCall = &util.PendingCall{
 			Call:      c.proxy.GetWorldUpdate(wu),
 			IssueTime: time.Now(),
@@ -552,11 +571,13 @@ func (c *ControlClient) GetUpdates(eventStream *EventStream, onErr func(error)) 
 	}
 }
 
-func (c *ControlClient) UpdateWorld(wu *WorldUpdate, eventStream *EventStream) {
+func (c *ControlClient) UpdateWorld(wu *sim.WorldUpdate, eventStream *sim.EventStream) {
 	c.State.Aircraft = wu.Aircraft
 	if wu.Controllers != nil {
 		c.State.Controllers = wu.Controllers
 	}
+	c.State.HumanControllers = wu.HumanControllers
+
 	c.State.ERAMComputers = wu.ERAMComputers
 
 	c.State.LaunchConfig = wu.LaunchConfig
@@ -564,11 +585,10 @@ func (c *ControlClient) UpdateWorld(wu *WorldUpdate, eventStream *EventStream) {
 	c.State.UserRestrictionAreas = wu.UserRestrictionAreas
 
 	c.State.SimTime = wu.Time
-	c.State.SimIsPaused = wu.SimIsPaused
+	c.State.Paused = wu.SimIsPaused
 	c.State.SimRate = wu.SimRate
-	c.State.TotalDepartures = wu.TotalDepartures
-	c.State.TotalArrivals = wu.TotalArrivals
-	c.State.TotalOverflights = wu.TotalOverflights
+	c.State.TotalIFR = wu.TotalIFR
+	c.State.TotalVFR = wu.TotalVFR
 	c.State.Instructors = wu.Instructors
 
 	// Important: do this after updating aircraft, controllers, etc.,
@@ -578,7 +598,7 @@ func (c *ControlClient) UpdateWorld(wu *WorldUpdate, eventStream *EventStream) {
 	}
 }
 
-func (c *ControlClient) checkPendingRPCs(eventStream *EventStream, onErr func(error)) {
+func (c *ControlClient) checkPendingRPCs(eventStream *sim.EventStream, onErr func(error)) {
 	c.pendingCalls = util.FilterSlice(c.pendingCalls,
 		func(call *util.PendingCall) bool { return !call.CheckFinished() })
 
@@ -589,10 +609,10 @@ func (c *ControlClient) checkPendingRPCs(eventStream *EventStream, onErr func(er
 	}
 }
 
-func checkTimeout(call *util.PendingCall, eventStream *EventStream, onErr func(error)) bool {
+func checkTimeout(call *util.PendingCall, eventStream *sim.EventStream, onErr func(error)) bool {
 	if time.Since(call.IssueTime) > 5*time.Second {
-		eventStream.Post(Event{
-			Type:    StatusMessageEvent,
+		eventStream.Post(sim.Event{
+			Type:    sim.StatusMessageEvent,
 			Message: "No response from server for over 5 seconds. Network connection may be lost.",
 		})
 		if onErr != nil {
@@ -607,7 +627,7 @@ func (c *ControlClient) Connected() bool {
 	return c.proxy != nil
 }
 
-func (c *ControlClient) GetSerializeSim() (*Sim, error) {
+func (c *ControlClient) GetSerializeSim() (*sim.Sim, error) {
 	return c.proxy.GetSerializeSim()
 }
 
@@ -633,7 +653,7 @@ func (c *ControlClient) SetSimRate(r float32) {
 	c.SimRate = r // so the UI is well-behaved...
 }
 
-func (c *ControlClient) SetLaunchConfig(lc LaunchConfig) {
+func (c *ControlClient) SetLaunchConfig(lc sim.LaunchConfig) {
 	c.pendingCalls = append(c.pendingCalls, &util.PendingCall{
 		Call:      c.proxy.SetLaunchConfig(lc),
 		IssueTime: time.Now(),
@@ -648,12 +668,12 @@ func (c *ControlClient) SetLaunchConfig(lc LaunchConfig) {
 func (c *ControlClient) CurrentTime() time.Time {
 	t := c.SimTime
 
-	if !c.SimIsPaused && !c.lastUpdateRequest.IsZero() {
+	if !c.State.Paused && !c.lastUpdateRequest.IsZero() {
 		d := time.Since(c.lastUpdateRequest)
 
 		// Roughly account for RPC overhead; more for a remote server (where
 		// SimName will be set.)
-		if c.SimName == "" {
+		if !c.remoteSim {
 			d -= 10 * time.Millisecond
 		} else {
 			d -= 50 * time.Millisecond
@@ -673,26 +693,6 @@ func (c *ControlClient) CurrentTime() time.Time {
 		c.lastReturnedTime = t
 	}
 	return c.lastReturnedTime
-}
-
-func (c *ControlClient) ScopeDrawArrivals() map[string]map[int]bool {
-	return c.scopeDraw.arrivals
-}
-
-func (c *ControlClient) ScopeDrawApproaches() map[string]map[string]bool {
-	return c.scopeDraw.approaches
-}
-
-func (c *ControlClient) ScopeDrawDepartures() map[string]map[string]map[string]bool {
-	return c.scopeDraw.departures
-}
-
-func (c *ControlClient) ScopeDrawOverflights() map[string]map[int]bool {
-	return c.scopeDraw.overflights
-}
-
-func (c *ControlClient) ScopeDrawAirspace() map[string]map[string]bool {
-	return c.scopeDraw.airspace
 }
 
 func (c *ControlClient) DeleteAllAircraft(onErr func(err error)) {
@@ -751,407 +751,4 @@ func (c *ControlClient) TowerListAirports() []string {
 
 func (c *ControlClient) StringIsSPC(s string) bool {
 	return av.StringIsSPC(s) || slices.Contains(c.State.STARSFacilityAdaptation.CustomSPCs, s)
-}
-
-func (c *ControlClient) DrawScenarioInfoWindow(lg *log.Logger) (show bool) {
-	// Ensure that the window is wide enough to show the description
-	sz := imgui.CalcTextSize(c.State.SimDescription, false, 0)
-	imgui.SetNextWindowSizeConstraints(imgui.Vec2{sz.X + 50, 0}, imgui.Vec2{100000, 100000})
-
-	show = true
-	imgui.BeginV(c.State.SimDescription, &show, imgui.WindowFlagsAlwaysAutoResize)
-
-	// Make big(ish) tables somewhat more legible
-	tableFlags := imgui.TableFlagsBordersV | imgui.TableFlagsBordersOuterH |
-		imgui.TableFlagsRowBg | imgui.TableFlagsSizingStretchProp
-
-	if imgui.CollapsingHeader("Arrivals") {
-		if imgui.BeginTableV("arr", 4, tableFlags, imgui.Vec2{}, 0) {
-			if c.scopeDraw.arrivals == nil {
-				c.scopeDraw.arrivals = make(map[string]map[int]bool)
-			}
-
-			imgui.TableSetupColumn("Draw")
-			imgui.TableSetupColumn("Arrival")
-			imgui.TableSetupColumn("Airport(s)")
-			imgui.TableSetupColumn("Description")
-			imgui.TableHeadersRow()
-
-			for _, name := range util.SortedMapKeys(c.State.InboundFlows) {
-				arrivals := c.State.InboundFlows[name].Arrivals
-				if len(arrivals) == 0 {
-					continue
-				}
-				if c.scopeDraw.arrivals[name] == nil {
-					c.scopeDraw.arrivals[name] = make(map[int]bool)
-				}
-
-				for i, arr := range arrivals {
-					if len(c.State.LaunchConfig.InboundFlowRates[name]) == 0 {
-						// Not used in the current scenario.
-						continue
-					}
-
-					imgui.TableNextRow()
-					imgui.TableNextColumn()
-					enabled := c.scopeDraw.arrivals[name][i]
-					imgui.Checkbox(fmt.Sprintf("##arr-%s-%d", name, i), &enabled)
-					c.scopeDraw.arrivals[name][i] = enabled
-
-					imgui.TableNextColumn()
-					imgui.Text(name)
-
-					imgui.TableNextColumn()
-					airports := util.SortedMapKeys(arr.Airlines)
-					imgui.Text(strings.Join(airports, ", "))
-
-					imgui.TableNextColumn()
-					if arr.Description != "" {
-						imgui.Text(arr.Description)
-					} else {
-						imgui.Text("--")
-					}
-				}
-			}
-
-			imgui.EndTable()
-		}
-	}
-
-	if imgui.CollapsingHeader("Approaches") {
-		if imgui.BeginTableV("appr", 6, tableFlags, imgui.Vec2{}, 0) {
-			if c.scopeDraw.approaches == nil {
-				c.scopeDraw.approaches = make(map[string]map[string]bool)
-			}
-
-			imgui.TableSetupColumn("Draw")
-			imgui.TableSetupColumn("Airport")
-			imgui.TableSetupColumn("Runway")
-			imgui.TableSetupColumn("Code")
-			imgui.TableSetupColumn("Description")
-			imgui.TableSetupColumn("FAF")
-			imgui.TableHeadersRow()
-
-			for _, rwy := range c.State.ArrivalRunways {
-				if ap, ok := c.State.Airports[rwy.Airport]; !ok {
-					lg.Errorf("%s: arrival airport not in world airports", rwy.Airport)
-				} else {
-					if c.scopeDraw.approaches[rwy.Airport] == nil {
-						c.scopeDraw.approaches[rwy.Airport] = make(map[string]bool)
-					}
-					for _, name := range util.SortedMapKeys(ap.Approaches) {
-						appr := ap.Approaches[name]
-						if appr.Runway == rwy.Runway {
-							imgui.TableNextRow()
-							imgui.TableNextColumn()
-							enabled := c.scopeDraw.approaches[rwy.Airport][name]
-							imgui.Checkbox("##enable-"+rwy.Airport+"-"+rwy.Runway+"-"+name, &enabled)
-							c.scopeDraw.approaches[rwy.Airport][name] = enabled
-
-							imgui.TableNextColumn()
-							imgui.Text(rwy.Airport)
-
-							imgui.TableNextColumn()
-							imgui.Text(rwy.Runway)
-
-							imgui.TableNextColumn()
-							imgui.Text(name)
-
-							imgui.TableNextColumn()
-							imgui.Text(appr.FullName)
-
-							imgui.TableNextColumn()
-							for _, wp := range appr.Waypoints[0] {
-								if wp.FAF {
-									imgui.Text(wp.Fix)
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-			imgui.EndTable()
-		}
-	}
-
-	if imgui.CollapsingHeader("Departures") {
-		if imgui.BeginTableV("departures", 5, tableFlags, imgui.Vec2{}, 0) {
-			if c.scopeDraw.departures == nil {
-				c.scopeDraw.departures = make(map[string]map[string]map[string]bool)
-			}
-
-			imgui.TableSetupColumn("Draw")
-			imgui.TableSetupColumn("Airport")
-			imgui.TableSetupColumn("Runway")
-			imgui.TableSetupColumn("Exit")
-			imgui.TableSetupColumn("Description")
-			imgui.TableHeadersRow()
-
-			for _, airport := range util.SortedMapKeys(c.State.LaunchConfig.DepartureRates) {
-				if c.scopeDraw.departures[airport] == nil {
-					c.scopeDraw.departures[airport] = make(map[string]map[string]bool)
-				}
-				ap := c.State.Airports[airport]
-
-				runwayRates := c.State.LaunchConfig.DepartureRates[airport]
-				for _, rwy := range util.SortedMapKeys(runwayRates) {
-					if c.scopeDraw.departures[airport][rwy] == nil {
-						c.scopeDraw.departures[airport][rwy] = make(map[string]bool)
-					}
-
-					exitRoutes := ap.DepartureRoutes[rwy]
-
-					// Multiple routes may have the same waypoints, so
-					// we'll reverse-engineer that here so we can present
-					// them together in the UI.
-					routeToExit := make(map[string][]string)
-					for _, exit := range util.SortedMapKeys(exitRoutes) {
-						exitRoute := ap.DepartureRoutes[rwy][exit]
-						r := exitRoute.Waypoints.Encode()
-						routeToExit[r] = append(routeToExit[r], exit)
-					}
-
-					for _, exit := range util.SortedMapKeys(exitRoutes) {
-						// Draw the row only when we hit the first exit
-						// that uses the corresponding route route.
-						r := exitRoutes[exit].Waypoints.Encode()
-						if routeToExit[r][0] != exit {
-							continue
-						}
-
-						imgui.TableNextRow()
-						imgui.TableNextColumn()
-						enabled := c.scopeDraw.departures[airport][rwy][exit]
-						imgui.Checkbox("##enable-"+airport+"-"+rwy+"-"+exit, &enabled)
-						c.scopeDraw.departures[airport][rwy][exit] = enabled
-
-						imgui.TableNextColumn()
-						imgui.Text(airport)
-						imgui.TableNextColumn()
-						rwyBase, _, _ := strings.Cut(rwy, ".")
-						imgui.Text(rwyBase)
-						imgui.TableNextColumn()
-						if len(routeToExit) == 1 {
-							// If we only saw a single departure route, no
-							// need to list all of the exits in the UI
-							// (there are often a lot of them!)
-							imgui.Text("(all)")
-						} else {
-							// List all of the exits that use this route.
-							imgui.Text(strings.Join(routeToExit[r], ", "))
-						}
-						imgui.TableNextColumn()
-						imgui.Text(exitRoutes[exit].Description)
-					}
-				}
-			}
-			imgui.EndTable()
-		}
-	}
-
-	if imgui.CollapsingHeader("Overflights") {
-		if imgui.BeginTableV("over", 3, tableFlags, imgui.Vec2{}, 0) {
-			if c.scopeDraw.overflights == nil {
-				c.scopeDraw.overflights = make(map[string]map[int]bool)
-			}
-
-			imgui.TableSetupColumn("Draw")
-			imgui.TableSetupColumn("Overflight")
-			imgui.TableSetupColumn("Description")
-			imgui.TableHeadersRow()
-
-			for _, name := range util.SortedMapKeys(c.State.InboundFlows) {
-				overflights := c.State.InboundFlows[name].Overflights
-				if len(overflights) == 0 {
-					continue
-				}
-
-				if c.scopeDraw.overflights[name] == nil {
-					c.scopeDraw.overflights[name] = make(map[int]bool)
-				}
-				if _, ok := c.State.LaunchConfig.InboundFlowRates[name]["overflights"]; !ok {
-					// Not used in the current scenario.
-					continue
-				}
-
-				for i, of := range overflights {
-					imgui.TableNextRow()
-					imgui.TableNextColumn()
-					enabled := c.scopeDraw.overflights[name][i]
-					imgui.Checkbox(fmt.Sprintf("##of-%s-%d", name, i), &enabled)
-					c.scopeDraw.overflights[name][i] = enabled
-
-					imgui.TableNextColumn()
-					imgui.Text(name)
-
-					imgui.TableNextColumn()
-					if of.Description != "" {
-						imgui.Text(of.Description)
-					} else {
-						imgui.Text("--")
-					}
-				}
-			}
-
-			imgui.EndTable()
-		}
-	}
-
-	if imgui.CollapsingHeader("Controllers") {
-		if imgui.BeginTableV("controllers", 4, tableFlags, imgui.Vec2{}, 0) {
-			imgui.TableSetupColumn("TCP")
-			imgui.TableSetupColumn("Human")
-			imgui.TableSetupColumn("Frequency")
-			imgui.TableSetupColumn("Name")
-			imgui.TableHeadersRow()
-
-			// Sort 2-char before 3-char and then alphabetically
-			sorted := maps.Keys(c.Controllers)
-			slices.SortFunc(sorted, func(a, b string) int {
-				if len(a) < len(b) {
-					return -1
-				} else if len(a) > len(b) {
-					return 1
-				} else {
-					return strings.Compare(a, b)
-				}
-			})
-
-			for _, id := range sorted {
-				ctrl := c.Controllers[id]
-				imgui.TableNextRow()
-				imgui.TableNextColumn()
-				imgui.Text(ctrl.Id())
-				imgui.TableNextColumn()
-				if ctrl.IsHuman {
-					sq := renderer.FontAwesomeIconCheckSquare
-					// Center the square in the column
-					// https://stackoverflow.com/a/66109051
-					pos := imgui.CursorPosX() + float32(imgui.ColumnWidth()) - imgui.CalcTextSize(sq, false, 0).X - imgui.ScrollX() -
-						2*imgui.CurrentStyle().ItemSpacing().X
-					if pos > imgui.CursorPosX() {
-						imgui.SetCursorPos(imgui.Vec2{X: pos, Y: imgui.CursorPos().Y})
-					}
-					imgui.Text(sq)
-				}
-				imgui.TableNextColumn()
-				imgui.Text(ctrl.Frequency.String())
-				imgui.TableNextColumn()
-				imgui.Text(ctrl.Position)
-			}
-
-			imgui.EndTable()
-		}
-	}
-
-	if len(c.State.Airspace) > 0 && imgui.CollapsingHeader("Airspace") {
-		if c.scopeDraw.airspace == nil {
-			c.scopeDraw.airspace = make(map[string]map[string]bool)
-			for ctrl, sectors := range c.State.Airspace {
-				c.scopeDraw.airspace[ctrl] = make(map[string]bool)
-				for _, sector := range util.SortedMapKeys(sectors) {
-					c.scopeDraw.airspace[ctrl][sector] = false
-				}
-			}
-		}
-		for _, pos := range util.SortedMapKeys(c.scopeDraw.airspace) {
-			hdr := pos
-			if ctrl, ok := c.State.Controllers[pos]; ok {
-				hdr += " (" + ctrl.Position + ")"
-			}
-			if imgui.TreeNode(hdr) {
-				if imgui.BeginTableV("volumes", 2, tableFlags, imgui.Vec2{}, 0) {
-					for _, vol := range util.SortedMapKeys(c.scopeDraw.airspace[pos]) {
-						imgui.TableNextRow()
-						imgui.TableNextColumn()
-						b := c.scopeDraw.airspace[pos][vol]
-						if imgui.Checkbox("##"+vol, &b) {
-							c.scopeDraw.airspace[pos][vol] = b
-						}
-						imgui.TableNextColumn()
-						imgui.Text(vol)
-					}
-
-					imgui.EndTable()
-				}
-				imgui.TreePop()
-			}
-		}
-	}
-
-	if imgui.CollapsingHeader("Tower/Coordination Lists") {
-		if imgui.BeginTableV("tclists", 3, tableFlags, imgui.Vec2{}, 0) {
-			imgui.TableSetupColumn("Id")
-			imgui.TableSetupColumn("Type")
-			imgui.TableSetupColumn("Airports")
-			imgui.TableHeadersRow()
-
-			for i, ap := range c.TowerListAirports() {
-				imgui.TableNextRow()
-				imgui.TableNextColumn()
-				imgui.Text(strconv.Itoa(i + 1))
-				imgui.TableNextColumn()
-				imgui.Text("Tower")
-				imgui.TableNextColumn()
-				imgui.Text(ap)
-			}
-
-			cl := util.DuplicateSlice(c.State.STARSFacilityAdaptation.CoordinationLists)
-			slices.SortFunc(cl, func(a, b CoordinationList) int { return strings.Compare(a.Id, b.Id) })
-
-			for _, list := range cl {
-				imgui.TableNextRow()
-				imgui.TableNextColumn()
-				imgui.Text(list.Id)
-				imgui.TableNextColumn()
-				imgui.Text("Coord. (" + list.Name + ")")
-				imgui.TableNextColumn()
-				imgui.Text(strings.Join(list.Airports, ", "))
-			}
-			imgui.EndTable()
-		}
-	}
-
-	if aa := c.State.STARSFacilityAdaptation.AirspaceAwareness; len(aa) > 0 {
-		if imgui.CollapsingHeader("Airspace Awareness") {
-			if imgui.BeginTableV("awareness", 4, tableFlags, imgui.Vec2{}, 0) {
-				imgui.TableSetupColumn("Fix")
-				imgui.TableSetupColumn("Altitude")
-				imgui.TableSetupColumn("A/C Type")
-				imgui.TableSetupColumn("Controller")
-				imgui.TableHeadersRow()
-
-				for _, aware := range aa {
-					for _, fix := range aware.Fix {
-						imgui.TableNextRow()
-						imgui.TableNextColumn()
-						imgui.Text(fix)
-						imgui.TableNextColumn()
-						alt := ""
-						if aware.AltitudeRange[0] > 0 {
-							if aware.AltitudeRange[1] < 60000 {
-								alt = av.FormatAltitude(float32(aware.AltitudeRange[0])) + " - " +
-									av.FormatAltitude(float32(aware.AltitudeRange[1]))
-							} else {
-								alt = av.FormatAltitude(float32(aware.AltitudeRange[0])) + "+"
-							}
-						} else if aware.AltitudeRange[1] < 60000 {
-							alt = av.FormatAltitude(float32(aware.AltitudeRange[1])) + "-"
-						}
-						imgui.Text(alt)
-						imgui.TableNextColumn()
-						imgui.Text(strings.Join(aware.AircraftType, ", "))
-						imgui.TableNextColumn()
-						imgui.Text(aware.ReceivingController)
-					}
-				}
-
-				imgui.EndTable()
-			}
-		}
-	}
-
-	imgui.End()
-	return
 }

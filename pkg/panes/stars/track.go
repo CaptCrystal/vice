@@ -36,9 +36,6 @@ func (sp *STARSPane) getTrack(ctx *panes.Context, ac *av.Aircraft) *sim.TrackInf
 	trk.SP2 = ac.SecondaryScratchpad
 	trk.RedirectedHandoff = ac.RedirectedHandoff
 	trk.PointOutHistory = ac.PointOutHistory
-	if trk.FlightPlan == nil {
-		trk.FlightPlan = sim.MakeSTARSFlightPlan(ac.FlightPlan)
-	}
 
 	return trk
 }
@@ -466,7 +463,7 @@ func (sp *STARSPane) updateMSAWs(ctx *panes.Context) {
 func (sp *STARSPane) updateRadarTracks(ctx *panes.Context) {
 	// FIXME: all aircraft radar tracks are updated at the same time.
 	now := ctx.ControlClient.SimTime
-	if sp.radarMode(ctx.ControlClient.RadarSites) == RadarModeFused {
+	if sp.radarMode(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites) == RadarModeFused {
 		if now.Sub(sp.lastTrackUpdate) < 1*time.Second {
 			return
 		}
@@ -736,9 +733,9 @@ func (sp *STARSPane) drawRadarTrack(ac *av.Aircraft, state *AircraftState, headi
 
 	primaryTargetBrightness := ps.Brightness.PrimarySymbols
 	if primaryTargetBrightness > 0 {
-		switch mode := sp.radarMode(ctx.ControlClient.RadarSites); mode {
+		switch mode := sp.radarMode(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites); mode {
 		case RadarModeSingle:
-			site := ctx.ControlClient.RadarSites[ps.RadarSiteSelected]
+			site := ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites[ps.RadarSiteSelected]
 			primary, secondary, dist := site.CheckVisibility(pos, state.TrackAltitude())
 
 			// Orient the box toward the radar
@@ -775,7 +772,8 @@ func (sp *STARSPane) drawRadarTrack(ac *av.Aircraft, state *AircraftState, headi
 			ld.AddLine(line[0], line[1], primaryTargetBrightness.ScaleRGB(renderer.RGB{R: .1, G: .8, B: .1}))
 
 		case RadarModeMulti:
-			primary, secondary, _ := sp.radarVisibility(ctx.ControlClient.RadarSites, pos, state.TrackAltitude())
+			primary, secondary, _ := sp.radarVisibility(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites,
+				pos, state.TrackAltitude())
 			rot := math.Rotator2f(heading)
 
 			// blue box: x +/-9 pixels, y +/-3 pixels
@@ -925,7 +923,7 @@ func (sp *STARSPane) WarnOutsideAirspace(ctx *panes.Context, ac *av.Aircraft) ([
 	state := sp.Aircraft[ac.Callsign]
 	vols := ctx.ControlClient.ControllerAirspace(ctx.ControlClient.PrimaryTCP)
 
-	inside, alts := sim.InAirspace(ac.Position(), ac.Altitude(), vols)
+	inside, alts := av.InAirspace(ac.Position(), ac.Altitude(), vols)
 	if state.EnteredOurAirspace && !inside {
 		return alts, true
 	} else if inside {
@@ -1368,10 +1366,10 @@ func (sp *STARSPane) getLeaderLineVector(ctx *panes.Context, dir math.CardinalOr
 	return math.Scale2f(v, pxLengths[idx])
 }
 
-func (sp *STARSPane) isOverflight(ctx *panes.Context, trk *sim.TrackInformation) bool {
-	return trk != nil && trk.FlightPlan != nil &&
-		ctx.ControlClient.Airports[trk.FlightPlan.DepartureAirport] == nil &&
-		ctx.ControlClient.Airports[trk.FlightPlan.ArrivalAirport] == nil
+func (sp *STARSPane) isOverflight(ctx *panes.Context, ac *av.Aircraft) bool {
+	return ac.FlightPlan != nil &&
+		ctx.ControlClient.Airports[ac.FlightPlan.DepartureAirport] == nil &&
+		ctx.ControlClient.Airports[ac.FlightPlan.ArrivalAirport] == nil
 }
 
 func (sp *STARSPane) radarVisibility(radarSites map[string]*av.RadarSite, pos math.Point2LL, alt int) (primary, secondary bool, distance float32) {

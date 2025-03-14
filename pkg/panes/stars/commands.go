@@ -18,6 +18,7 @@ import (
 	"github.com/mmp/vice/pkg/panes"
 	"github.com/mmp/vice/pkg/platform"
 	"github.com/mmp/vice/pkg/renderer"
+	"github.com/mmp/vice/pkg/server"
 	"github.com/mmp/vice/pkg/sim"
 	"github.com/mmp/vice/pkg/util"
 
@@ -379,6 +380,11 @@ func (sp *STARSPane) executeSTARSCommand(cmd string, ctx *panes.Context) (status
 			status.output = "DRAWROUTE"
 			return
 
+		case ".VFR":
+			sp.showVFRAirports = !sp.showVFRAirports
+			status.clear = true
+			return
+
 		case "?":
 			ctx.ControlClient.State.ERAMComputers.DumpMap()
 			status.clear = true
@@ -542,7 +548,7 @@ func (sp *STARSPane) executeSTARSCommand(cmd string, ctx *panes.Context) (status
 				fp, err := sim.MakeSTARSFlightPlanFromAbbreviated(cmd, ctx.ControlClient.STARSComputer(),
 					ctx.ControlClient.STARSFacilityAdaptation)
 				if fp != nil {
-					ctx.ControlClient.UploadFlightPlan(fp, sim.LocalNonEnroute, nil,
+					ctx.ControlClient.UploadFlightPlan(fp, av.LocalNonEnroute, nil,
 						func(err error) { sp.displayError(err, ctx) })
 					status.output = fmt.Sprintf("%v%v%v %04o\nNO ROUTE %v", fp.Callsign,
 						util.Select(fp.AircraftType != "", " ", ""), fp.AircraftType, fp.AssignedSquawk,
@@ -1635,15 +1641,15 @@ func (sp *STARSPane) executeSTARSCommand(cmd string, ctx *panes.Context) (status
 		} else if len(cmd) > 0 {
 			// Index, character id, or name
 			if i, err := strconv.Atoi(cmd); err == nil {
-				if i < 0 || i >= len(ctx.ControlClient.RadarSites) {
+				if i < 0 || i >= len(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites) {
 					status.err = ErrSTARSIllegalValue
 				} else {
-					ps.RadarSiteSelected = util.SortedMapKeys(ctx.ControlClient.RadarSites)[i]
+					ps.RadarSiteSelected = util.SortedMapKeys(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites)[i]
 					status.clear = true
 				}
 				return
 			}
-			for id, rs := range ctx.ControlClient.RadarSites {
+			for id, rs := range ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites {
 				if cmd == rs.Char || cmd == id {
 					ps.RadarSiteSelected = id
 					status.clear = true
@@ -1877,7 +1883,7 @@ func (sp *STARSPane) executeSTARSCommand(cmd string, ctx *panes.Context) (status
 				} else if pos, ok := sp.parseRALocation(ctx, strings.Join(parsed.extra, " ")); !ok {
 					status.err = ErrSTARSIllegalGeoLoc
 				} else {
-					ra := sim.RestrictionArea{
+					ra := av.RestrictionArea{
 						Text:         parsed.text,
 						TextPosition: pos,
 						BlinkingText: parsed.blink,
@@ -1900,7 +1906,7 @@ func (sp *STARSPane) executeSTARSCommand(cmd string, ctx *panes.Context) (status
 					status.err = ErrSTARSIllegalGeoLoc
 				} else {
 					// Mostly done but need to allow the text position to be specified.
-					sp.setWIPRestrictionArea(ctx, &sim.RestrictionArea{
+					sp.setWIPRestrictionArea(ctx, &av.RestrictionArea{
 						Text:         parsed.text,
 						CircleCenter: pos,
 						CircleRadius: rad,
@@ -1917,7 +1923,7 @@ func (sp *STARSPane) executeSTARSCommand(cmd string, ctx *panes.Context) (status
 				if p, ok := sp.parseRALocation(ctx, cmd[1:]); !ok {
 					status.err = ErrSTARSIllegalGeoLoc
 				} else {
-					sp.setWIPRestrictionArea(ctx, &sim.RestrictionArea{
+					sp.setWIPRestrictionArea(ctx, &av.RestrictionArea{
 						Closed:   cmd[0] == 'P',
 						Vertices: [][]math.Point2LL{{p}},
 					})
@@ -2098,7 +2104,7 @@ func (sp *STARSPane) runAircraftCommands(ctx *panes.Context, ac *av.Aircraft, cm
 		func(errStr string, remaining string) {
 			if errStr != "" {
 				sp.previewAreaInput = remaining
-				if err := sim.TryDecodeErrorString(errStr); err != nil {
+				if err := server.TryDecodeErrorString(errStr); err != nil {
 					err = GetSTARSError(err, ctx.Lg)
 					sp.displayError(err, ctx)
 				} else {
@@ -2108,7 +2114,7 @@ func (sp *STARSPane) runAircraftCommands(ctx *panes.Context, ac *av.Aircraft, cm
 		})
 }
 
-func (sp *STARSPane) setWIPRestrictionArea(ctx *panes.Context, ra *sim.RestrictionArea) {
+func (sp *STARSPane) setWIPRestrictionArea(ctx *panes.Context, ra *av.RestrictionArea) {
 	sp.wipRestrictionArea = ra
 	if ctx.Mouse != nil {
 		sp.wipRestrictionAreaMousePos = ctx.Mouse.Pos
@@ -2164,7 +2170,7 @@ func tryConsumeFloat(cmd string) (string, float32, bool) {
 	}
 }
 
-func getUserRestrictionAreaByIndex(ctx *panes.Context, idx int) *sim.RestrictionArea {
+func getUserRestrictionAreaByIndex(ctx *panes.Context, idx int) *av.RestrictionArea {
 	if idx < 1 || idx-1 >= len(ctx.ControlClient.State.UserRestrictionAreas) {
 		return nil
 	} else if ra := &ctx.ControlClient.State.UserRestrictionAreas[idx-1]; ra.Deleted {
@@ -2174,7 +2180,7 @@ func getUserRestrictionAreaByIndex(ctx *panes.Context, idx int) *sim.Restriction
 	}
 }
 
-func getRestrictionAreaByIndex(ctx *panes.Context, idx int) *sim.RestrictionArea {
+func getRestrictionAreaByIndex(ctx *panes.Context, idx int) *av.RestrictionArea {
 	if ra := getUserRestrictionAreaByIndex(ctx, idx); ra != nil {
 		return ra
 	} else if idx < 101 || idx-101 >= len(ctx.ControlClient.STARSFacilityAdaptation.RestrictionAreas) {
@@ -3172,7 +3178,7 @@ func (sp *STARSPane) executeSTARSClickedCommand(ctx *panes.Context, cmd string, 
 				if cmd == "" {
 					if trk := sp.getTrack(ctx, ac); trk != nil && trk.TrackOwner != "" {
 						// Associated track; display ACID, RBC (received beacon code), ABC (assigned beacon code) in preview area.
-						status.output = ac.Callsign + " " + ac.Squawk.String() + " " + trk.FlightPlan.AssignedSquawk.String()
+						status.output = ac.Callsign + " " + ac.Squawk.String() + " " + ac.FlightPlan.AssignedSquawk.String()
 					} else {
 						// Unassociated track.
 						state.DisplayLDBBeaconCode = !state.DisplayLDBBeaconCode
@@ -3623,7 +3629,7 @@ func (sp *STARSPane) executeSTARSClickedCommand(ctx *panes.Context, cmd string, 
 		} else if cmd == "A" || cmd == "P" {
 			// Start a polygon
 			p := transforms.LatLongFromWindowP(mousePosition)
-			sp.setWIPRestrictionArea(ctx, &sim.RestrictionArea{
+			sp.setWIPRestrictionArea(ctx, &av.RestrictionArea{
 				Closed:   cmd[0] == 'P',
 				Vertices: [][]math.Point2LL{{p}},
 			})
@@ -3642,7 +3648,7 @@ func (sp *STARSPane) executeSTARSClickedCommand(ctx *panes.Context, cmd string, 
 				status.err = ErrSTARSCommandFormat
 			} else {
 				// Still need the text position, one way or another.
-				sp.setWIPRestrictionArea(ctx, &sim.RestrictionArea{
+				sp.setWIPRestrictionArea(ctx, &av.RestrictionArea{
 					Text:         parsed.text,
 					CircleRadius: rad,
 					CircleCenter: transforms.LatLongFromWindowP(mousePosition),
@@ -3660,7 +3666,7 @@ func (sp *STARSPane) executeSTARSClickedCommand(ctx *panes.Context, cmd string, 
 			} else if len(parsed.extra) != 0 {
 				status.err = ErrSTARSCommandFormat
 			} else {
-				ra := sim.RestrictionArea{
+				ra := av.RestrictionArea{
 					Text:         parsed.text,
 					TextPosition: transforms.LatLongFromWindowP(mousePosition),
 					BlinkingText: parsed.blink,
@@ -3678,7 +3684,7 @@ func (sp *STARSPane) executeSTARSClickedCommand(ctx *panes.Context, cmd string, 
 	return
 }
 
-func (sp *STARSPane) createRestrictionArea(ctx *panes.Context, ra sim.RestrictionArea) {
+func (sp *STARSPane) createRestrictionArea(ctx *panes.Context, ra av.RestrictionArea) {
 	// Go ahead and make it visible, assuming which index will be assigned
 	// to reduce update latency.
 	ps := sp.currentPrefs()
@@ -3693,7 +3699,7 @@ func (sp *STARSPane) createRestrictionArea(ctx *panes.Context, ra sim.Restrictio
 	}, func(err error) { sp.displayError(err, ctx) })
 }
 
-func (sp *STARSPane) updateRestrictionArea(ctx *panes.Context, idx int, ra sim.RestrictionArea) {
+func (sp *STARSPane) updateRestrictionArea(ctx *panes.Context, idx int, ra av.RestrictionArea) {
 	ctx.ControlClient.UpdateRestrictionArea(idx, ra, func(any) {
 		ps := sp.currentPrefs()
 		if settings, ok := ps.RestrictionAreaSettings[idx]; ok {
@@ -3836,7 +3842,7 @@ func (sp *STARSPane) consumeMouseEvents(ctx *panes.Context, ghosts []*av.GhostAi
 				state.IsSelected = !state.IsSelected
 			}
 		}
-	} else if !ctx.ControlClient.SimIsPaused {
+	} else if !ctx.ControlClient.State.Paused {
 		switch sp.currentPrefs().DwellMode {
 		case DwellModeOff:
 			sp.dwellAircraft = ""

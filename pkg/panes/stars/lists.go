@@ -15,7 +15,6 @@ import (
 	"github.com/mmp/vice/pkg/math"
 	"github.com/mmp/vice/pkg/panes"
 	"github.com/mmp/vice/pkg/renderer"
-	"github.com/mmp/vice/pkg/sim"
 	"github.com/mmp/vice/pkg/util"
 )
 
@@ -266,7 +265,7 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, aircraft []*
 			}
 		}
 		if filter.All || filter.Radar {
-			pw = td.AddText(sp.radarSiteId(ctx.ControlClient.RadarSites), pw, listStyle)
+			pw = td.AddText(sp.radarSiteId(ctx.ControlClient.State.STARSFacilityAdaptation.RadarSites), pw, listStyle)
 		}
 		newline()
 	}
@@ -731,7 +730,7 @@ func (sp *STARSPane) drawRestrictionAreasList(ctx *panes.Context, pw [2]float32,
 	var text strings.Builder
 	text.WriteString("GEO RESTRICTIONS\n")
 
-	add := func(ra sim.RestrictionArea, idx int) {
+	add := func(ra av.RestrictionArea, idx int) {
 		if ra.Deleted {
 			return
 		}
@@ -871,7 +870,8 @@ func (sp *STARSPane) drawSignOnList(ctx *panes.Context, pw [2]float32, style ren
 
 	var text strings.Builder
 	if ctrl := ctx.ControlClient.Controllers[ctx.ControlClient.PrimaryTCP]; ctrl != nil {
-		text.WriteString(ctx.ControlClient.PrimaryTCP + " " + ctrl.SignOnTime.UTC().Format("1504")) // TODO: initials
+		signOnTime := ctx.ControlClient.SessionStats.SignOnTime
+		text.WriteString(ctx.ControlClient.PrimaryTCP + " " + signOnTime.UTC().Format("1504")) // TODO: initials
 		td.AddText(text.String(), pw, style)
 	}
 }

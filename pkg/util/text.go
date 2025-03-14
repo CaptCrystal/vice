@@ -7,14 +7,12 @@ package util
 import (
 	"crypto/sha256"
 	"errors"
+	"hash/fnv"
 	"io"
 	"strconv"
 	"strings"
 	"unicode"
 )
-
-///////////////////////////////////////////////////////////////////////////
-// decompression
 
 // WrapText wraps the provided text string to the given column limit, returning the
 // wrapped string and the number of lines it became.  indent gives the amount to
@@ -136,4 +134,10 @@ func Hash(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return hash.Sum(nil), nil
+}
+
+func HashString64(s string) uint64 {
+	hash := fnv.New64a()
+	io.Copy(hash, strings.NewReader(s))
+	return hash.Sum64()
 }
