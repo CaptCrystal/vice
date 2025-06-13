@@ -1,4 +1,24 @@
 {
+  "KGTB": {
+    "name": "Wheeler-Sack Army Airfield",
+    "elevation": 522,
+    "location": "N44.04.06.600,W075-44-09.600W",
+    "runways": [
+      {
+        "id": "3",
+        "heading": 027,
+        "threshold": "N35.58.34.000,W095.23.03.000",
+        "elevation": 623
+      },
+      {
+        "id": "21",
+        "heading": 207,
+        "threshold": "N44.4.39,W75.43.03",
+        "elevation": 623
+      }
+    ]
+  },
+{
   "4V4": {
     "name": "",
     "elevation": 623,
