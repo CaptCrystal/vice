@@ -9,7 +9,9 @@
     - [ ] 43B
   - [ ] Add more inbound flows into BGR
   - [ ] Add more airline variety at all airport
-      
+
+- [ ] HNL Tracon - 0%
+    
 - [ ] PCT Full Scenarios - 0%
   - [ ] Combine all files
   - [ ] Add any necessary adjustments for full scenario files
