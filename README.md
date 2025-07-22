@@ -1,7 +1,7 @@
 ## Crystal's Vice Development Fork
 
 ## My List:
-[ ] BGR Update - 10%
+- [ ] BGR Update - 10%
   - [ ] Add uncontrolled SATs
     - [X] BHB
     - [ ] 1B0
@@ -10,4 +10,4 @@
   - [ ] Add more inbound flows into BGR
   - [ ] Add more airline variety at all airport
       
-[ ] PCT Full Scenarios - 0%
+- [ ] PCT Full Scenarios - 0%
