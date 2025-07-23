@@ -16,4 +16,6 @@
   - [ ] Combine all files
   - [ ] Add any necessary adjustments for full scenario files
         
-- [ ] M03
+- [ ] M03 TRACON - 0%
+    
+- [ ] RSW TRACON - 0%
