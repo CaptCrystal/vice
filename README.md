@@ -4,7 +4,7 @@
 - [ ] BGR Update - 30%
   - [X] Add uncontrolled SATs
     - [X] BHB
-  - [ ] Add more inbound flows into BGR
+  - [X] Add more inbound flows into BGR
   - [ ] Add more airline variety at all airport
 
 - [ ] HNL Tracon - 0%
