@@ -1,7 +1,7 @@
 ## Crystal's Vice Development Fork
 
 ## My List:
-- [ ] BGR Update - 30%
+- [ ] BGR Update - 70%
   - [X] Add uncontrolled SATs
     - [X] BHB
   - [X] Add more inbound flows into BGR
