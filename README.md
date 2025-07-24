@@ -13,10 +13,11 @@
     - [X] Scenario Configs
     - [X] Control Positions
     - [X] Inbound Flows
-    - [ ] Airline Variation
+    - [ ] Departure Airline Variation
+    - [ ] Arrivals Airline Variation
     
 - [ ] PCT Full Scenarios - 0%
-  - [ ] Combine all files
+  - [ ] Combine files
   - [ ] Add any necessary adjustments for full scenario files
         
 - [ ] M03 TRACON - 0%
