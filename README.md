@@ -5,9 +5,15 @@
   - [X] Add uncontrolled SATs
     - [X] BHB
   - [X] Add more inbound flows into BGR
-  - [ ] Add more airline variety at all airport
+  - [ ] Add more airline variety at all airports
 
-- [ ] HNL Tracon - 0%
+- [ ] HNL Tracon - 25%
+    - [X] Video Maps
+    - [X] SIDs
+    - [ ] Scenario Configs
+    - [X] Control Positions
+    - [ ] Inbound Flows
+    - [ ] Airline Variation
     
 - [ ] PCT Full Scenarios - 0%
   - [ ] Combine all files
