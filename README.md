@@ -7,10 +7,10 @@
   - [X] Add more inbound flows into BGR
   - [ ] Add more airline variety at all airports
 
-- [ ] HNL Tracon - 65%
+- [ ] HNL Tracon - 45%
     - [X] Video Maps
-    - [X] SIDs
-    - [ ] Scenario Configs
+    - [ ] SIDs
+    - [X] Scenario Configs
     - [X] Control Positions
     - [X] Inbound Flows
     - [ ] Airline Variation
