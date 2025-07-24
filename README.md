@@ -12,7 +12,7 @@
     - [X] SIDs
     - [ ] Scenario Configs
     - [X] Control Positions
-    - [ ] Inbound Flows
+    - [X] Inbound Flows
     - [ ] Airline Variation
     
 - [ ] PCT Full Scenarios - 0%
