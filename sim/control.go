@@ -3883,6 +3883,8 @@ func (s *Sim) runOneControlCommand(tcw TCW, callsign av.ADSBCallsign, command st
 			return s.ResumeOwnNavigation(tcw, callsign)
 		} else if command == "RST" {
 			return s.RadarServicesTerminated(tcw, callsign)
+		} else if command == "RW" {
+			return s.RockWings(tcw, callsign)
 		} else if len(command) >= 5 && command[1] == 'D' {
 			return s.DirectFix(tcw, callsign, command[2:], av.TurnRight)
 		} else if l := len(command); l > 2 && command[l-1] == 'D' {
@@ -3895,7 +3897,8 @@ func (s *Sim) runOneControlCommand(tcw TCW, callsign av.ADSBCallsign, command st
 				ADSBCallsign: callsign,
 				RightDegrees: deg,
 			})
-		} else {
+		} 
+		else {
 			hdg, err := strconv.Atoi(command[1:])
 			if err != nil {
 				return nil, err
