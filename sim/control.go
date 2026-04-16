@@ -2506,6 +2506,16 @@ func (s *Sim) ResumeOwnNavigation(tcw TCW, callsign av.ADSBCallsign) (av.Command
 		})
 }
 
+func (s *Sim) RockWings(tcw TCW, callsign av.ADSBCallsign) (av.CommandIntent, error) {
+	s.mu.Lock(s.lg)
+	defer s.mu.Unlock(s.lg)
+
+	return s.dispatchControlledAircraftCommand(tcw, callsign,
+		func(tcw TCW, ac *Aircraft) av.CommandIntent {
+			return ac.RockWings()
+		})
+} 
+
 func (s *Sim) AltitudeOurDiscretion(tcw TCW, callsign av.ADSBCallsign) (av.CommandIntent, error) {
 	s.mu.Lock(s.lg)
 	defer s.mu.Unlock(s.lg)
